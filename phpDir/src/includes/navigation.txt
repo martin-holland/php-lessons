@@ -11,3 +11,4 @@ Practice Section 8:8.php
 Practice Section 9:9.php
 Practice Section 10:10.php
 Lesson 11 - Authentication:11-authentication.php
+Lesson 12 - AI Integration:12-ai-integration.php
