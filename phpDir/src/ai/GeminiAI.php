@@ -9,6 +9,7 @@ class GeminiAI {
     private $apiKey;
     // Model endpoint
     private $apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
+    private $openAIUrl = 'https://api.openai.com/v1/chat/completions';
 
     public function __construct() {
         $this->loadApiKey();

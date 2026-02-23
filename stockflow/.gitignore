@@ -1,0 +1,23 @@
+# Environment files with secrets
+phpDir/includes/config.local.php
+frontend/.env
+.env
+
+# Dependencies
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

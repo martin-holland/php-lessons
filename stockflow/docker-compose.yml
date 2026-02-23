@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # PHP + Apache (API Backend)
+  apache:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      - ./phpDir:/var/www/html
+    environment:
+      - APACHE_DOCUMENT_ROOT=/var/www/html
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+
+  # React Frontend (Vite Dev Server)
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    depends_on:
+      - apache
+
+volumes:
+  frontend_node_modules:
