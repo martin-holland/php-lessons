@@ -22,10 +22,15 @@ class SupabaseAuth {
     private $accessToken = null;
     private $user = null;
 
+    // Logging configuration
+    private $debug = true;   // Set to false to disable logging
+    private $logs = [];      // Store logs for display on page
+
     /**
      * Constructor - Loads environment variables and starts session
      */
-    public function __construct() {
+    public function __construct($debug = true) {
+        $this->debug = $debug;
         // Start PHP session for storing auth tokens
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
@@ -232,6 +237,66 @@ class SupabaseAuth {
     }
 
     /**
+     * Log a message (for debugging)
+     */
+    private function log($type, $message, $data = null) {
+        if (!$this->debug) return;
+
+        $entry = [
+            'time' => date('H:i:s.') . substr(microtime(), 2, 3),
+            'type' => $type,
+            'message' => $message,
+            'data' => $data
+        ];
+
+        $this->logs[] = $entry;
+
+        // Also write to PHP error log
+        error_log("[SupabaseAuth] [$type] $message" . ($data ? ": " . json_encode($data) : ""));
+    }
+
+    /**
+     * Get all logs (for displaying on page)
+     */
+    public function getLogs() {
+        return $this->logs;
+    }
+
+    /**
+     * Render logs as HTML (for debugging on page)
+     */
+    public function renderLogs() {
+        if (empty($this->logs)) return '';
+
+        $html = '<div style="background: #1e1e1e; color: #d4d4d4; padding: 15px; margin: 20px 0; border-radius: 5px; font-family: monospace; font-size: 13px; max-height: 400px; overflow-y: auto;">';
+        $html .= '<strong style="color: #569cd6;">🔍 Supabase Debug Logs</strong><hr style="border-color: #444; margin: 10px 0;">';
+
+        foreach ($this->logs as $log) {
+            $color = match($log['type']) {
+                'REQUEST' => '#4ec9b0',
+                'RESPONSE' => '#9cdcfe',
+                'ERROR' => '#f14c4c',
+                default => '#d4d4d4'
+            };
+
+            $html .= '<div style="margin: 8px 0; border-left: 3px solid ' . $color . '; padding-left: 10px;">';
+            $html .= '<span style="color: #808080;">[' . $log['time'] . ']</span> ';
+            $html .= '<span style="color: ' . $color . '; font-weight: bold;">' . $log['type'] . '</span> ';
+            $html .= '<span>' . htmlspecialchars($log['message']) . '</span>';
+
+            if ($log['data'] !== null) {
+                $json = json_encode($log['data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                $html .= '<pre style="background: #2d2d2d; padding: 10px; margin: 5px 0; border-radius: 3px; overflow-x: auto; white-space: pre-wrap;">' . htmlspecialchars($json) . '</pre>';
+            }
+
+            $html .= '</div>';
+        }
+
+        $html .= '</div>';
+        return $html;
+    }
+
+    /**
      * Make an HTTP request to Supabase
      *
      * This is the core method that handles all API communication.
@@ -239,6 +304,10 @@ class SupabaseAuth {
      */
     private function makeRequest($method, $endpoint, $data = null) {
         $url = $this->supabaseUrl . $endpoint;
+
+        // Log the request with auth status
+        $authStatus = $this->accessToken ? 'WITH AUTH TOKEN' : 'NO AUTH (anonymous)';
+        $this->log('REQUEST', "$method $endpoint [$authStatus]", $data);
 
         // Set up headers
         $headers = [
@@ -272,23 +341,32 @@ class SupabaseAuth {
         }
 
         // Execute request
+        $startTime = microtime(true);
         $response = curl_exec($ch);
+        $duration = round((microtime(true) - $startTime) * 1000, 2);
+
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
 
         // Handle errors
         if ($error) {
+            $this->log('ERROR', "cURL error: $error");
             throw new Exception("cURL error: " . $error);
         }
 
         // Parse response
         $decoded = json_decode($response, true);
 
+        // Log the response
+        $rowCount = is_array($decoded) ? count($decoded) : 0;
+        $this->log('RESPONSE', "HTTP $httpCode ({$duration}ms, $rowCount rows)", $decoded);
+
         // Check for API errors
         if ($httpCode >= 400) {
             $errorMsg = isset($decoded['message']) ? $decoded['message'] :
                        (isset($decoded['error_description']) ? $decoded['error_description'] : $response);
+            $this->log('ERROR', "API error: $errorMsg");
             throw new Exception("Supabase API error ($httpCode): " . $errorMsg);
         }
 
