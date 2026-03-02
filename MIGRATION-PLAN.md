@@ -458,19 +458,44 @@ Supabase provides an official JavaScript client (`@supabase/supabase-js`) that h
 
 ---
 
-## Migration Order (Recommended)
+## Build Steps (Detailed)
 
-| Step | Task                                        | Effort   |
-| ---- | ------------------------------------------- | -------- |
-| 1    | Scaffold repo structure (`api/` + `client/`)| Small    |
-| 2    | Set up Slim Framework with one test endpoint| Small    |
-| 3    | Port auth flow to stateless JWT validation  | Medium   |
-| 4    | Build all API endpoints                     | Medium   |
-| 5    | Scaffold React app with Vite + Router       | Small    |
-| 6    | Build API service layer in React            | Small    |
-| 7    | Build React pages (products, orders, etc.)  | Medium   |
-| 8    | Implement auth flow in React                | Medium   |
-| 9    | Docker Compose for local dev                | Small    |
-| 10   | Deploy API to Render                        | Small    |
-| 11   | Deploy React to Vercel or Render            | Small    |
-| 12   | Production hardening (CORS, env vars, etc.) | Medium   |
+All work lives in `stockflow/` so it can be deployed independently from the learning repo.
+
+### Part A: PHP API Backend
+
+| Step | File(s)                          | Task                                              | Status |
+| ---- | -------------------------------- | ------------------------------------------------- | ------ |
+| 1    | `api/composer.json`              | Define dependencies (Slim, PSR-7, phpdotenv)      | Done   |
+| 2    | `api/public/.htaccess`           | Apache URL rewriting to front controller           |        |
+| 3    | `api/public/index.php`           | Front controller: load Slim, CORS, route files     |        |
+| 4    | `api/.env`                       | Environment variables for Supabase + Gemini        |        |
+| 5    | `api/src/Auth/SupabaseAuth.php`  | Port to stateless (no `$_SESSION`, token via header)|       |
+| 6    | `api/src/Middleware/AuthMiddleware.php` | Extract Bearer token, reject unauthenticated |        |
+| 7    | `api/src/Routes/auth.php`        | Login URL, callback, user info, logout             |        |
+| 8    | `api/src/Routes/products.php`    | GET /api/products                                  |        |
+| 9    | `api/src/Routes/orders.php`      | GET /api/orders                                    |        |
+| 10   | `api/src/Routes/notes.php`       | GET, POST, DELETE /api/notes                       |        |
+| 11   | `api/src/AI/GeminiAI.php` + `api/src/Routes/ai.php` | Port Gemini class + AI endpoint |        |
+| 12   | `api/Dockerfile`                 | Docker image for PHP API                           |        |
+| 13   | `stockflow/docker-compose.yml`   | Local dev orchestration (API + client)             |        |
+
+### Part B: React Frontend (future)
+
+| Step | Task                                              | Status |
+| ---- | ------------------------------------------------- | ------ |
+| 14   | Scaffold React app with Vite + TypeScript          |        |
+| 15   | Build API service layer (`services/api.ts`)        |        |
+| 16   | Build auth flow (Login, Callback pages)            |        |
+| 17   | Build data pages (Products, Orders, Notes)         |        |
+| 18   | Build AI story page                                |        |
+| 19   | Routing with React Router                          |        |
+| 20   | Styling (Tailwind or similar)                      |        |
+
+### Part C: Deployment
+
+| Step | Task                                              | Status |
+| ---- | ------------------------------------------------- | ------ |
+| 21   | Deploy PHP API to Render (Docker web service)      |        |
+| 22   | Deploy React to Vercel or Render Static            |        |
+| 23   | Production hardening (CORS lockdown, env vars, rate limiting) |  |
