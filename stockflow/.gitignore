@@ -1,0 +1,10 @@
+# Environment files with real secrets
+api/.env
+client/.env
+
+# PHP dependencies (installed via composer install)
+api/vendor/
+
+# Node dependencies (installed via npm install)
+client/node_modules/
+client/dist/

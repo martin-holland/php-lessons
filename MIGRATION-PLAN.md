@@ -467,9 +467,9 @@ All work lives in `stockflow/` so it can be deployed independently from the lear
 | Step | File(s)                          | Task                                              | Status |
 | ---- | -------------------------------- | ------------------------------------------------- | ------ |
 | 1    | `api/composer.json`              | Define dependencies (Slim, PSR-7, phpdotenv)      | Done   |
-| 2    | `api/public/.htaccess`           | Apache URL rewriting to front controller           |        |
-| 3    | `api/public/index.php`           | Front controller: load Slim, CORS, route files     |        |
-| 4    | `api/.env`                       | Environment variables for Supabase + Gemini        |        |
+| 2    | `api/public/.htaccess`           | Apache URL rewriting to front controller           | Done   |
+| 3    | `api/public/index.php`           | Front controller: load Slim, CORS, route files     | Done   |
+| 4    | `api/.env` + `.env.example` + `.gitignore` | Environment variables for Supabase + Gemini | Done   |
 | 5    | `api/src/Auth/SupabaseAuth.php`  | Port to stateless (no `$_SESSION`, token via header)|       |
 | 6    | `api/src/Middleware/AuthMiddleware.php` | Extract Bearer token, reject unauthenticated |        |
 | 7    | `api/src/Routes/auth.php`        | Login URL, callback, user info, logout             |        |
@@ -499,3 +499,142 @@ All work lives in `stockflow/` so it can be deployed independently from the lear
 | 21   | Deploy PHP API to Render (Docker web service)      |        |
 | 22   | Deploy React to Vercel or Render Static            |        |
 | 23   | Production hardening (CORS lockdown, env vars, rate limiting) |  |
+
+---
+
+## Step Notes
+
+### Step 1: `api/composer.json`
+
+Defines the project's PHP dependencies (like `package.json` in Node):
+
+- **`slim/slim ^4.0`** — Lightweight routing framework. Maps URLs like `/api/orders` to PHP functions. Minimal by design — no ORM, no templating, just routing and middleware.
+- **`slim/psr7 ^1.0`** — Provides the HTTP Request/Response objects that Slim uses. PSR-7 is a PHP standard interface; this is Slim's implementation of it.
+- **`vlucas/phpdotenv ^5.0`** — Reads `.env` files into `$_ENV`. Replaces the manual file parsing in the original `SupabaseAuth.php`.
+
+The `autoload` section sets up PSR-4 autoloading: `"StockFlow\\" → "src/"` means `use StockFlow\Auth\SupabaseAuth` automatically loads `src/Auth/SupabaseAuth.php` — no `require` statements needed.
+
+### Step 2: `api/public/.htaccess`
+
+This file tells Apache to use the **front controller pattern** — routing all requests through a single `index.php` file instead of mapping URLs to individual PHP files.
+
+```apache
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+```
+
+**Why we need this:** In the original app, each URL maps to a real file (`/12-products.php` → the file `12-products.php`). In the new API, a request to `/api/products` has no matching file on disk — there's no `products` file in `public/`. Without `.htaccess`, Apache returns a 404.
+
+**How it works line by line:**
+
+1. `RewriteEngine On` — Enables Apache's mod_rewrite module
+2. `RewriteCond %{REQUEST_FILENAME} !-f` — Only apply the rule if the URL does NOT match a real file (`!-f` = not a file). This allows actual static files (images, CSS) to still be served directly.
+3. `RewriteCond %{REQUEST_FILENAME} !-d` — Same check for directories (`!-d` = not a directory)
+4. `RewriteRule ^ index.php [QSA,L]` — Send everything else to `index.php`. Flags: `QSA` preserves query string parameters (`?key=value`), `L` stops processing further rules.
+
+**The result:** Apache delegates URL handling to PHP. Slim (inside `index.php`) reads the actual URL from the request and calls the matching route function. This is how every modern PHP framework works (Laravel, Symfony, etc).
+
+### Step 3: `api/public/index.php` — The Front Controller
+
+This is the single file that every request hits (thanks to `.htaccess`). It does 7 things in order:
+
+```php
+<?php
+// 1. Load Composer's autoloader
+require __DIR__ . '/../vendor/autoload.php';
+
+// 2. Load .env variables
+$dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/..');
+$dotenv->load();
+
+// 3. Create the Slim app
+$app = AppFactory::create();
+
+// 4. Add built-in middleware (body parsing + error handling)
+$app->addBodyParsingMiddleware();
+$app->addErrorMiddleware(true, true, true);
+
+// 5. CORS middleware + OPTIONS preflight handler
+// 6. Load route files (auth, products, orders, notes, ai)
+// 7. $app->run() — start handling the request
+```
+
+**Request lifecycle — before vs after:**
+
+```
+BEFORE (original app):
+  Browser requests /12-products.php
+    → Apache finds the file 12-products.php
+    → PHP runs that file top to bottom
+    → HTML is printed and sent back
+
+AFTER (Slim API):
+  Browser requests /api/products
+    → Apache can't find a file called "api/products"
+    → .htaccess sends the request to index.php
+    → index.php boots Slim
+    → Slim reads the URL "/api/products" and method "GET"
+    → Slim finds the matching route in Routes/products.php
+    → CORS middleware runs (adds headers)
+    → Your route function runs (queries Supabase, returns JSON)
+    → Slim sends the response
+```
+
+**Key concepts in this file:**
+
+1. **Composer autoloader** (`vendor/autoload.php`) — Replaces all manual `require_once` statements. Composer generates a map of class names to file paths so that `new SupabaseAuth()` automatically loads `src/Auth/SupabaseAuth.php`. This is the PSR-4 mapping we defined in `composer.json`.
+
+2. **phpdotenv** (`Dotenv\Dotenv::createImmutable`) — Reads `api/.env` and makes values available via `$_ENV['SUPABASE_URL']` etc. Replaces the manual `file()` + `explode()` parsing in the original `SupabaseAuth::loadEnv()`.
+
+3. **Body parsing middleware** — Automatically decodes JSON request bodies into arrays. In the original app you'd use `json_decode(file_get_contents('php://input'))`. With this middleware, `$request->getParsedBody()` just works.
+
+4. **Error middleware** — Catches uncaught exceptions and returns proper HTTP error responses instead of raw PHP stack traces. The three `true` arguments enable: displayErrorDetails, logErrors, logErrorDetails (set to `false` in production).
+
+5. **CORS middleware** — The most important new concept. In the original app, PHP served both the HTML page and the data, so the browser never blocked anything (same origin). Once React runs on a different port or domain (e.g. `localhost:5173` calling `localhost:8005`), the browser enforces **Cross-Origin Resource Sharing** and blocks the request unless the server explicitly allows it with these headers:
+   - `Access-Control-Allow-Origin` — Which domain can call the API
+   - `Access-Control-Allow-Headers` — Which HTTP headers the client can send (we need `Content-Type` and `Authorization`)
+   - `Access-Control-Allow-Methods` — Which HTTP methods are permitted
+
+6. **OPTIONS preflight** — Before making a cross-origin POST/DELETE, the browser sends a "preflight" OPTIONS request to ask permission. The `$app->options('/{routes:.+}', ...)` handler catches these and returns 200 immediately so the browser proceeds with the real request.
+
+7. **Route loading** — Each `require` pulls in a file that registers its routes on `$app`. This keeps the entry point clean while organising endpoints by feature. Slim holds all the routes in memory and matches the incoming URL against them.
+
+### Step 4: `api/.env`, `.env.example`, and `.gitignore`
+
+Three files created for this step:
+
+**`api/.env`** — The real environment file with actual keys. Never committed to git.
+
+**`api/.env.example`** — A template with placeholder values. Safe to commit so anyone cloning the repo knows which variables are needed.
+
+**`stockflow/.gitignore`** — Prevents secrets and generated files from being committed.
+
+**Why `.env` lives in `api/` not `stockflow/` root:**
+
+The path is determined by `index.php`:
+```php
+// index.php lives at:    api/public/index.php
+// __DIR__         =      api/public/
+// __DIR__ . '/..' =      api/          ← phpdotenv looks here for .env
+$dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/..');
+```
+
+Each service owns its own `.env` because they have different needs:
+- **`api/.env`** holds secrets (Supabase key, Gemini key) that must stay server-side
+- **`client/.env`** (later) will only hold `VITE_API_URL` — no secrets, since all browser code is visible to users via dev tools
+
+In production (Render, Vercel), there are no `.env` files at all — you set environment variables in each platform's dashboard instead.
+
+**Variables compared to the original:**
+
+| Variable          | Original `.env`         | New `api/.env`          | Notes                           |
+| ----------------- | ----------------------- | ----------------------- | ------------------------------- |
+| `SUPABASE_URL`    | Same                    | Same                    | Unchanged                       |
+| `SUPABASE_ANON_KEY` | Same                 | Same                    | Unchanged                       |
+| `SITE_URL`        | `http://localhost:8005` | `http://localhost:8005` | Now used for OAuth callbacks    |
+| `CLIENT_URL`      | Did not exist           | `http://localhost:5173` | **New** — used by CORS middleware to allow React to call the API |
+| `GEMINI_API_KEY`  | Same                    | Same                    | Unchanged                       |
+
+The only new variable is `CLIENT_URL`. In the original app CORS wasn't needed because PHP served both HTML and data (same origin). Now that React runs on a separate port/domain, `index.php` reads `CLIENT_URL` to set the `Access-Control-Allow-Origin` header.
