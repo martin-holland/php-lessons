@@ -52,8 +52,6 @@ $app->add(function ($request, $handler) {
 require __DIR__ . '/../src/Routes/auth.php';
 require __DIR__ . '/../src/Routes/products.php';
 require __DIR__ . '/../src/Routes/orders.php';
-require __DIR__ . '/../src/Routes/notes.php';
-require __DIR__ . '/../src/Routes/ai.php';
 
 // 7. Start handling the request
 //    Slim reads the URL and HTTP method, finds the matching route,

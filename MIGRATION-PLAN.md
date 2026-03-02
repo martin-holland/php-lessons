@@ -470,13 +470,13 @@ All work lives in `stockflow/` so it can be deployed independently from the lear
 | 2    | `api/public/.htaccess`           | Apache URL rewriting to front controller           | Done   |
 | 3    | `api/public/index.php`           | Front controller: load Slim, CORS, route files     | Done   |
 | 4    | `api/.env` + `.env.example` + `.gitignore` | Environment variables for Supabase + Gemini | Done   |
-| 5    | `api/src/Auth/SupabaseAuth.php`  | Port to stateless (no `$_SESSION`, token via header)|       |
-| 6    | `api/src/Middleware/AuthMiddleware.php` | Extract Bearer token, reject unauthenticated |        |
-| 7    | `api/src/Routes/auth.php`        | Login URL, callback, user info, logout             |        |
-| 8    | `api/src/Routes/products.php`    | GET /api/products                                  |        |
-| 9    | `api/src/Routes/orders.php`      | GET /api/orders                                    |        |
-| 10   | `api/src/Routes/notes.php`       | GET, POST, DELETE /api/notes                       |        |
-| 11   | `api/src/AI/GeminiAI.php` + `api/src/Routes/ai.php` | Port Gemini class + AI endpoint |        |
+| 5    | `api/src/Auth/SupabaseAuth.php`  | Port to stateless (no `$_SESSION`, token via header)| Done  |
+| 6    | `api/src/Middleware/AuthMiddleware.php` | Extract Bearer token, reject unauthenticated | Done  |
+| 7    | `api/src/Routes/auth.php`        | Login URL, user info, logout                       | Done   |
+| 8    | `api/src/Routes/products.php`    | GET /api/products                                  | Done   |
+| 9    | `api/src/Routes/orders.php`      | GET /api/orders                                    | Done   |
+| ~~10~~ | ~~`api/src/Routes/notes.php`~~ | ~~GET, POST, DELETE /api/notes~~                   | Skipped |
+| ~~11~~ | ~~`api/src/AI/GeminiAI.php` + `api/src/Routes/ai.php`~~ | ~~Port Gemini class + AI endpoint~~ | Skipped |
 | 12   | `api/Dockerfile`                 | Docker image for PHP API                           |        |
 | 13   | `stockflow/docker-compose.yml`   | Local dev orchestration (API + client)             |        |
 
@@ -638,3 +638,168 @@ In production (Render, Vercel), there are no `.env` files at all — you set env
 | `GEMINI_API_KEY`  | Same                    | Same                    | Unchanged                       |
 
 The only new variable is `CLIENT_URL`. In the original app CORS wasn't needed because PHP served both HTML and data (same origin). Now that React runs on a separate port/domain, `index.php` reads `CLIENT_URL` to set the `Access-Control-Allow-Origin` header.
+
+### Steps 5-9: SupabaseAuth, Middleware, and Routes
+
+These five files were built together because they form a chain:
+
+```
+HTTP Request
+  → AuthMiddleware (extracts token from header)
+    → Route handler (creates SupabaseAuth, sets token, queries Supabase)
+      → JSON Response
+```
+
+#### Step 5: `api/src/Auth/SupabaseAuth.php` — Stateless Supabase Client
+
+**What changed from the original (`phpDir/src/auth/SupabaseAuth.php`):**
+
+| Original                        | New                              | Why                                  |
+| ------------------------------- | -------------------------------- | ------------------------------------ |
+| `session_start()` in constructor | Removed entirely                | Stateless API — no sessions          |
+| `$_SESSION` for token storage   | `setToken()` method             | Token comes from request header      |
+| `loadEnv()` manual file parsing | Reads `$_ENV` directly          | phpdotenv in index.php handles this  |
+| `handleCallback()` with session | Removed                         | React handles the callback client-side |
+| `isLoggedIn()` / `getCurrentUser()` | Removed                     | These relied on session state        |
+| `debug`, `logs[]`, `renderLogs()` | Removed                       | Debug HTML doesn't belong in an API  |
+| `makeRequest()` cURL logic      | **Kept — almost identical**     | This is the core, it works well      |
+| `query()`, `insert()`, `delete()` | **Kept — identical**           | Database operations unchanged        |
+| `getGoogleSignInUrl()`          | **Kept — identical**            | Just builds a URL string             |
+| `getUser()`                     | **Kept — identical**            | Fetches user from Supabase           |
+| `logout()`                      | **Kept — simplified**           | Just calls Supabase, no session cleanup |
+
+The class is now ~140 lines (down from ~345). The `namespace StockFlow\Auth` line at the top is new — this is what lets Composer's autoloader find the file via `use StockFlow\Auth\SupabaseAuth`.
+
+#### Step 6: `api/src/Middleware/AuthMiddleware.php` — Token Extraction
+
+This is new — the original app didn't need it because `$_SESSION` handled auth state.
+
+The middleware is deliberately simple. It does **not** validate the token itself. Its only job:
+1. Check the `Authorization` header exists and starts with `Bearer `
+2. Extract the token string
+3. Attach it to the request via `$request->withAttribute('token', $token)`
+4. If no header → return 401 JSON immediately
+
+Supabase validates the token when `SupabaseAuth::makeRequest()` forwards it. If the token is expired or invalid, Supabase returns a 401 and we pass that through. This keeps our code simple — one source of truth for token validation (Supabase).
+
+Routes opt-in to auth by chaining `->add(new AuthMiddleware())`:
+```php
+$app->get('/api/products', function (...) { ... })->add(new AuthMiddleware());
+$app->get('/api/auth/login-url', function (...) { ... }); // no middleware = public
+```
+
+#### Step 7: `api/src/Routes/auth.php` — Authentication Endpoints
+
+Three endpoints, all returning JSON:
+
+| Endpoint               | Method | Auth | Purpose                            |
+| ---------------------- | ------ | ---- | ---------------------------------- |
+| `/api/auth/login-url`  | GET    | No   | Returns `{"url": "https://..."}` — the Google OAuth URL |
+| `/api/auth/user`       | GET    | Yes  | Returns user object from Supabase  |
+| `/api/auth/logout`     | POST   | Yes  | Invalidates token at Supabase      |
+
+**Key simplification:** The original `callback.php` (189 lines of PHP + HTML + JavaScript) is gone. In the new architecture, the OAuth callback is handled entirely by React:
+1. Supabase redirects to the React app with tokens in the URL fragment
+2. React's `Callback.tsx` page extracts the tokens with JavaScript
+3. React stores the token in `localStorage`
+4. React sends the token in the `Authorization` header on every API call
+
+PHP never sees the token during login — only when React makes subsequent API requests.
+
+#### Steps 8-9: `api/src/Routes/products.php` and `orders.php`
+
+These are the simplest files in the project. Each is essentially:
+
+```php
+$app->get('/api/endpoint', function ($request, $response) {
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+    $data = $auth->query('table_name', [/* same params as original */]);
+    $response->getBody()->write(json_encode($data));
+    return $response->withHeader('Content-Type', 'application/json');
+})->add(new AuthMiddleware());
+```
+
+**Compared to the originals:** The Supabase query is identical — same table, same parameters. The only difference is the original rendered an HTML table (50+ lines of `<?php foreach ... ?>` mixed with `<td>` tags). Now we just return the raw JSON and React will handle the rendering.
+
+| Original                         | New endpoint       | Query (unchanged)                                  |
+| -------------------------------- | ------------------ | -------------------------------------------------- |
+| `12-products.php` (80 lines)     | `GET /api/products`| `products` with `select=*,categories(name)&order=name.asc` |
+| `13-orders.php` (77 lines)       | `GET /api/orders`  | `orders` with `order=created_at.desc`              |
+
+### Local Development Prerequisites: PHP + Composer via Homebrew
+
+Before running `composer install`, you need both PHP and Composer available on your machine. On macOS, Homebrew makes this simple.
+
+#### Installing PHP (if not already present)
+
+```bash
+brew install php
+```
+
+This installs the latest PHP (we got 8.5.2). Verify with:
+```bash
+php -v
+# PHP 8.5.2 (cli) ...
+```
+
+#### Installing Composer
+
+Composer is PHP's package manager — equivalent to `npm` for Node. It reads `composer.json` and installs dependencies into a `vendor/` folder, plus generates an autoloader so you never need manual `require` statements.
+
+```bash
+brew install composer
+```
+
+Verify with:
+```bash
+composer --version
+# Composer version 2.9.5
+```
+
+#### Why this matters for local development
+
+Without Composer via Homebrew, the alternatives are more cumbersome:
+- **Download `composer.phar` manually** — works but you run it as `php composer.phar install` instead of just `composer install`, and you have to manage the file yourself
+- **Run Composer inside Docker** — adds a Docker dependency just to install packages; slower iteration loop
+- **Use the PHP built-in server** — only works if dependencies are already installed
+
+With Homebrew, both tools are managed centrally (`brew update` keeps them current) and available globally from any terminal. This also means you can run the PHP built-in dev server directly:
+
+```bash
+cd stockflow/api
+composer install                     # install dependencies
+php -S localhost:8005 -t public/     # start dev server
+```
+
+No Docker needed for development. Docker becomes a deployment/CI concern only.
+
+### Verification: Test Page (`api/public/test.php`)
+
+After installing dependencies, we created a test page to verify the full chain works before building more on top. The test page checks four things in order:
+
+1. **Environment variables** — All 4 `.env` values loaded correctly via phpdotenv
+2. **SupabaseAuth class** — Composer autoloading finds `src/Auth/SupabaseAuth.php` via the PSR-4 namespace mapping
+3. **Google OAuth URL** — `getGoogleSignInUrl()` builds a valid Supabase OAuth URL
+4. **Supabase queries** — When given a valid token, `query()` fetches real data (20 products with category joins confirmed working)
+
+Run it with:
+```bash
+cd stockflow/api
+php -S localhost:8005 -t public/
+# Open http://localhost:8005/test.php
+```
+
+This test page is for development only and should be deleted before deploying.
+
+### PHP 8.5 Note: `curl_close()` Deprecation
+
+During testing, PHP 8.5 showed this warning:
+
+```
+Deprecated: Function curl_close() is deprecated since 8.5, as it has no effect since PHP 8.0
+```
+
+The original `SupabaseAuth.php` used `curl_close($ch)` to clean up cURL handles. Since PHP 8.0, cURL handles are objects (not resources) and are automatically cleaned up when they go out of scope — just like any other PHP object. The explicit `curl_close()` call became a no-op in 8.0 and is now formally deprecated in 8.5.
+
+**Fix:** Simply remove the `curl_close($ch)` line. The handle is freed automatically when `makeRequest()` returns. This is the same pattern used in the new `SupabaseAuth.php`.
