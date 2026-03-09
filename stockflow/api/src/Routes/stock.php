@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Stock Movement Routes
+ * Stock Movement Routes — SOLVED
  *
  * EXERCISES IN THIS FILE:
  * - Exercise 3: Date/time recording for stock movements
@@ -16,34 +16,49 @@ use StockFlow\Middleware\AuthMiddleware;
 // ============================================================
 // GET /api/stock/movements — List stock movements (authenticated)
 // ============================================================
-// EXERCISE 3 (Step 2): Students build this route
-//
-// Stock movements track inventory changes (in, out, adjustment).
-// Each movement has a timestamp — this is where date/time matters most.
-//
-// Hints:
-//   - Query the stock_movements table
-//   - Join with products: 'select' => '*,products(name,sku)'
-//   - Sort by newest first: 'order' => 'created_at.desc'
-//   - Post-process: format dates, add relative time
-//   - Optional filter: ?product_id=uuid to see movements for one product
+// EXERCISE 3 (Step 2): SOLVED
 // ============================================================
 
-// STUB: Returns empty array until students implement Exercise 3 (Step 2).
-// Replace the body of this route with your own logic.
 $app->get('/api/stock/movements', function (Request $request, Response $response) {
 
-    // TODO: Replace this with real data from Supabase
-    //
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    //
-    // TODO: Read optional product_id filter from query params
-    // TODO: Build query with filters
-    // TODO: Post-process dates
-    // TODO: Return as JSON
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
 
-    $response->getBody()->write(json_encode([]));
+    // Read optional product_id filter
+    $params = $request->getQueryParams();
+    $productId = $params['product_id'] ?? null;
+
+    $queryParams = [
+        'select' => '*,products(name,sku)',
+        'order' => 'created_at.desc'
+    ];
+
+    if ($productId) {
+        $queryParams['product_id'] = 'eq.' . $productId;
+    }
+
+    $movements = $auth->query('stock_movements', $queryParams);
+
+    // Post-process: format dates and flatten product name
+    $processed = array_map(function ($movement) {
+        $dates = formatRelativeDate($movement['created_at']);
+
+        return [
+            'id' => $movement['id'],
+            'product_id' => $movement['product_id'],
+            'product_name' => $movement['products']['name'] ?? 'Unknown',
+            'product_sku' => $movement['products']['sku'] ?? '',
+            'quantity' => $movement['quantity'],
+            'movement_type' => $movement['movement_type'],
+            'reason' => $movement['reason'] ?? '',
+            'notes' => $movement['notes'] ?? '',
+            'created_at' => $movement['created_at'],
+            'created_date' => $dates['created_date'],
+            'created_ago' => $dates['created_ago'],
+        ];
+    }, $movements);
+
+    $response->getBody()->write(json_encode($processed));
     return $response->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());
@@ -52,59 +67,90 @@ $app->get('/api/stock/movements', function (Request $request, Response $response
 // ============================================================
 // POST /api/stock/movements — Record a stock movement (authenticated)
 // ============================================================
-// EXERCISE 3 (Step 3): Students build this route
-//
-// When stock moves in or out, we record it AND update the product's stock_quantity.
-// This is a two-step operation:
-//   1. Insert the movement record
-//   2. Update the product's stock_quantity
-//
-// The frontend sends:
-//   {
-//     product_id: "uuid",
-//     quantity: 10,
-//     movement_type: "in",       // "in", "out", or "adjustment"
-//     reason: "Supplier delivery",
-//     notes: "Invoice #12345"
-//   }
-//
-// EXERCISE 3 focus: The created_at timestamp is auto-set by the database.
-// But if you needed to record a movement for a past date, you could send:
-//   'created_at' => date('c', strtotime('2026-03-01'))  // ISO 8601 format
-//
-// Hints:
-//   - Validate: product_id, quantity (> 0), movement_type (in/out/adjustment)
-//   - For "out" movements, check that enough stock exists
-//   - Calculate new stock: for "in" add, for "out" subtract, for "adjustment" set directly
-//   - Update the product's stock_quantity after inserting the movement
+// EXERCISE 3 (Step 3): SOLVED
 // ============================================================
 
-// STUB: Returns "not implemented" until students implement Exercise 3 (Step 3).
-// Replace the body of this route with your own logic.
 $app->post('/api/stock/movements', function (Request $request, Response $response) {
 
-    // $body = $request->getParsedBody();
-    //
-    // --- PRE-PROCESSING ---
-    // TODO: Validate required fields
-    // TODO: Check movement_type is valid
-    // TODO: For "out" type, verify enough stock exists
-    //
-    // --- INSERT MOVEMENT ---
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    //
-    // TODO: Insert into stock_movements table
-    // TODO: Fetch current product stock_quantity
-    // TODO: Calculate new quantity based on movement_type
-    // TODO: Update product's stock_quantity
-    //
-    // --- POST-PROCESSING ---
-    // TODO: Return the movement and updated stock level
+    $body = $request->getParsedBody();
 
+    // --- PRE-PROCESSING ---
+    // Validate required fields
+    if (empty($body['product_id'])) {
+        $response->getBody()->write(json_encode(['error' => 'Product ID is required']));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $quantity = (int)($body['quantity'] ?? 0);
+    if ($quantity <= 0) {
+        $response->getBody()->write(json_encode(['error' => 'Quantity must be greater than 0']));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $movementType = $body['movement_type'] ?? '';
+    $validTypes = ['in', 'out', 'adjustment'];
+    if (!in_array($movementType, $validTypes)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Movement type must be one of: in, out, adjustment'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+
+    // Fetch current product to get stock_quantity
+    $products = $auth->query('products', [
+        'id' => 'eq.' . $body['product_id'],
+        'select' => 'id,name,stock_quantity'
+    ]);
+
+    if (empty($products)) {
+        $response->getBody()->write(json_encode(['error' => 'Product not found']));
+        return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+    }
+
+    $product = $products[0];
+    $currentStock = (int)$product['stock_quantity'];
+
+    // For "out" movements, check enough stock exists
+    if ($movementType === 'out' && $quantity > $currentStock) {
+        $response->getBody()->write(json_encode([
+            'error' => "Not enough stock. Current: $currentStock, requested: $quantity"
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    // Calculate new stock quantity
+    if ($movementType === 'in') {
+        $newStock = $currentStock + $quantity;
+    } elseif ($movementType === 'out') {
+        $newStock = $currentStock - $quantity;
+    } else {
+        // adjustment — set directly
+        $newStock = $quantity;
+    }
+
+    // --- INSERT MOVEMENT ---
+    $movement = $auth->insert('stock_movements', [
+        'product_id' => $body['product_id'],
+        'quantity' => $quantity,
+        'movement_type' => $movementType,
+        'reason' => trim($body['reason'] ?? ''),
+        'notes' => trim($body['notes'] ?? ''),
+    ]);
+
+    // Update product's stock_quantity
+    $auth->update('products', 'id=eq.' . $body['product_id'], [
+        'stock_quantity' => $newStock
+    ]);
+
+    // --- POST-PROCESSING ---
     $response->getBody()->write(json_encode([
-        'error' => 'Exercise 3: POST /api/stock/movements is not implemented yet'
+        'message' => 'Stock movement recorded',
+        'data' => $movement,
+        'new_stock_quantity' => $newStock
     ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());
