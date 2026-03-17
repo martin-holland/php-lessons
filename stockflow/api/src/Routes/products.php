@@ -48,18 +48,58 @@ $app->get('/api/products', function (Request $request, Response $response) {
     // $category = $params['category'] ?? null;
     // ... then build $queryParams based on what was sent
 
-    // Current query — fetches everything, no filtering
-    $products = $auth->query('products', [
+    $params = $request->getQueryParams();
+    $search = $params['search'] ?? null;
+    $category = $params['category'] ?? null;
+    $status = $params['status'] ?? null;
+    $sort = $params['sort'] ?? 'name';
+    $order = $params['order'] ?? 'asc';
+    $page = (int)($params['page'] ?? 1);
+    $limit = (int)($params['limit'] ?? 50);
+
+    // Build the query params
+    $queryParams = [
         'select' => '*,categories(name)',
-        'order' => 'name.asc'
-    ]);
+        'order' => $sort . '.' . $order,
+        'limit' => $limit,
+        'offset' => ($page - 1) * $limit,
+    ];
+
+    // Add search filter
+    if ($search) {
+        $queryParams['name'] = 'ilike.*' . $search . '*';
+    }
+
+    // Status filter:
+    if ($status) {
+        $queryParams['status'] = 'eq.' . $status;
+    }
+
+    // Current query — fetches everything, no filtering
+    $products = $auth->query('products', $queryParams);
 
     // --- POST-PROCESSING (Exercise 1) ---
     // TODO: Transform $products before sending to the frontend
     // Example: $processed = array_map(function ($product) { ... }, $products);
     // Then return $processed instead of $products
 
-    $response->getBody()->write(json_encode($products));
+    $processed = array_map(function ($product) {
+        return [
+            'id' => $product['id'],
+            'name' => $product['name'],
+            'sku' => $product['sku'],
+            'price' => number_format((float)$product['price'], 2, ','),   
+            'description' => $product['description'] ?? '',
+            'stock_quantity' => $product['stock_quantity'],
+            'category_name' => $product['categories']['name'] ?? 'Uncategorized',
+            'category_id' => $product['category_id'] ?? null,
+            'image_url' => $product['image_url'] ?? null,
+            'status' => $product['status'],
+
+        ];
+    }, $products);
+
+    $response->getBody()->write(json_encode($processed));
     return $response->withHeader('Content-Type', 'application/json');
 });
 
