@@ -9,6 +9,7 @@ $dotenv->load();
 $app = AppFactory::create();
 
 $app->addBodyParsingMiddleware();
+$app->addRoutingMiddleware();
 $app->addErrorMiddleware(true, true, true);
 
 // CORS middleware handling
@@ -28,8 +29,10 @@ $app->add(function ($request, $handler) {
 require __DIR__ . '/../src/Routes/auth.php';
 require __DIR__ . '/../src/Routes/products.php';
 require __DIR__ . '/../src/Routes/orders.php';
-// require __DIR__ . '/../src/Routes/notes.php';
-// require __DIR__ . '/../src/Routes/ai.php';
+require __DIR__ . '/../src/Routes/stock.php';
+require __DIR__ . '/../src/Routes/ai.php';
+require __DIR__ . '/../src/Routes/dashboard.php';
+// Reference: src/Routes/_route_examples.php (not loaded — read it to learn the patterns)
 
 // Slim reads the URL and HTTP method and finds the matching route. Runs any middleware, and sends the response.
 $app->run();
